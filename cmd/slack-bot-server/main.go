@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slack-go/slack"
+	"github.com/slack-go/slack/slackevents"
 
 	// interactionrouter "github.com/openshift/ci-tools/pkg/slack/interactions/router"
 	// "k8s.io/test-infra/prow/metrics"
@@ -148,6 +150,11 @@ func main() {
 		return bytes.TrimSpace(b)
 	}
 
+	routeEvents := events.MultiHandler(
+		showBlockersHandler(slackClient),
+		helpHandler(slackClient),
+	)
+
 	mux := http.NewServeMux()
 	// handle the root to allow for a simple uptime probe
 	// TODO(muller) enable handler once we somehow import metrics from k/test-infra
@@ -158,7 +165,7 @@ func main() {
 
 	// TODO(muller): Reenable when we need interactions
 	// mux.Handle("/slack/interactive-endpoint", intlslack.VerifyingInteractionHandler(slackSigningSecretProvider, interactionrouter.ForModals(nil, slackClient)))
-	mux.Handle("/slack/events-endpoint", intlslack.VerifyingEventHandler(slackSigningSecretProvider, routeEvents()))
+	mux.Handle("/slack/events-endpoint", intlslack.VerifyingEventHandler(slackSigningSecretProvider, routeEvents))
 	server := &http.Server{Addr: ":" + strconv.Itoa(8888), Handler: mux}
 
 	// health.ServeReady()
@@ -168,6 +175,83 @@ func main() {
 	interrupts.WaitForGracefulShutdown()
 }
 
-func routeEvents() events.Handler {
-	return events.MultiHandler()
+type messagePoster interface {
+	PostMessage(channelID string, options ...slack.MsgOption) (string, string, error)
+}
+
+func helpHandler(slackClient messagePoster) events.PartialHandler {
+	return events.PartialHandlerFunc("help", func(callback *slackevents.EventsAPIEvent, logger *logrus.Entry) (handled bool, err error) {
+		if callback.Type != slackevents.CallbackEvent {
+			return false, nil
+		}
+		event, ok := callback.InnerEvent.Data.(*slackevents.AppMentionEvent)
+		if !ok {
+			return false, nil
+		}
+
+		logger.Info("Handling app mention: unknown or bare command")
+		timestamp := event.TimeStamp
+		if event.ThreadTimeStamp != "" {
+			timestamp = event.ThreadTimeStamp
+		}
+		responseChannel, responseTimestamp, err := slackClient.PostMessage(
+			event.Channel,
+			slack.MsgOptionBlocks(helpResponse()...),
+			slack.MsgOptionTS(timestamp),
+		)
+		if err != nil {
+			logger.WithError(err).Warn("Failed to post response to app mention")
+		} else {
+			logger.Infof("Posted response to app mention in channel %s at %s", responseChannel, responseTimestamp)
+		}
+		return true, err
+	})
+}
+
+var helpMessageText = `I can help you with the following commands:
+
+*help* - Show this help message`
+
+func helpResponse() []slack.Block {
+	return []slack.Block{
+		slack.NewHeaderBlock(
+			slack.NewTextBlockObject(slack.PlainTextType, "OTA UpgradeBlocker Bot", false, false),
+		),
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject(slack.MarkdownType, helpMessageText, false, false),
+			nil,
+			nil,
+		),
+	}
+}
+
+func upgradeBlockersAsSlack() []slack.Block {
+	return nil
+}
+
+func showBlockersHandler(slackClient messagePoster) events.PartialHandler {
+	return events.PartialHandlerFunc("show_blockers", func(callback *slackevents.EventsAPIEvent, logger *logrus.Entry) (handled bool, err error) {
+		if callback.Type != slackevents.CallbackEvent {
+			return false, nil
+		}
+		event, ok := callback.InnerEvent.Data.(*slackevents.AppMentionEvent)
+		if !ok {
+			return false, nil
+		}
+
+		message := strings.ToLower(event.Text)
+		if !strings.Contains(message, "show blockers") {
+			return false, nil
+		}
+
+		logger.Info("Handling app mention: show blockers")
+
+		responseChannel, responseTimestamp, err := slackClient.PostMessage(event.Channel, slack.MsgOptionBlocks(upgradeBlockersAsSlack()...))
+		if err != nil {
+			logger.WithError(err).Warn("Failed to post response to app mention")
+		} else {
+			logger.Infof("Posted response to app mention in channel %s at %s", responseChannel, responseTimestamp)
+		}
+		return true, err
+	})
 }
