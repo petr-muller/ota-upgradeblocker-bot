@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"flag"
 	"fmt"
 	"net/http"
@@ -14,26 +13,25 @@ import (
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 
-	// interactionrouter "github.com/openshift/ci-tools/pkg/slack/interactions/router"
-	// "k8s.io/test-infra/prow/metrics"
-	// "k8s.io/test-infra/prow/logrusutil"
-	// "k8s.io/test-infra/prow/config/secret"
-	// "k8s.io/test-infra/prow/pjutil/pprof"
-	// "k8s.io/test-infra/prow/pjutil"
-	// "github.com/openshift/ci-tools/pkg/jira"
-	// "k8s.io/test-infra/pkg/flagutil"
-	// prowflagutil "k8s.io/test-infra/prow/flagutil"
-	"github.com/petr-muller/ota-upgradeblocker-bot/internal/interrupts"
+	"github.com/petr-muller/ota-upgradeblocker-bot/internal/flagutil"
+	secret "github.com/petr-muller/ota-upgradeblocker-bot/internal/prow/config/agent"
+	prowflagutil "github.com/petr-muller/ota-upgradeblocker-bot/internal/prow/flagutil"
+	"github.com/petr-muller/ota-upgradeblocker-bot/internal/prow/interrupts"
+	"github.com/petr-muller/ota-upgradeblocker-bot/internal/prow/logrusutil"
+	"github.com/petr-muller/ota-upgradeblocker-bot/internal/prow/simplifypath"
 	intlslack "github.com/petr-muller/ota-upgradeblocker-bot/internal/slack"
 	"github.com/petr-muller/ota-upgradeblocker-bot/internal/slack/events"
+	// interactionrouter "github.com/openshift/ci-tools/pkg/slack/interactions/router"
+	// "k8s.io/test-infra/prow/metrics"
+	// "k8s.io/test-infra/prow/pjutil/pprof"
+	// "k8s.io/test-infra/prow/pjutil"
 )
 
 type options struct {
 	logLevel string
 	// TODO(muller): Use this without importing k/test-infra
 	// instrumentationOptions prowflagutil.InstrumentationOptions
-	// TODO(muller): Use this without importing k/test-infra
-	// jiraOptions prowflagutil.JiraOptions
+	jiraOptions prowflagutil.JiraOptions
 
 	slackTokenPath         string
 	slackSigningSecretPath string
@@ -54,10 +52,11 @@ func (o *options) Validate() error {
 	}
 
 	// for _, group := range []flagutil.OptionGroup{&o.instrumentationOptions, &o.jiraOptions} {
-	// 	if err := group.Validate(false); err != nil {
-	// 		return err
-	// 	}
-	// }
+	for _, group := range []flagutil.OptionGroup{&o.jiraOptions} {
+		if err := group.Validate(false); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
@@ -67,8 +66,9 @@ func gatherOptions(fs *flag.FlagSet, args ...string) options {
 	fs.StringVar(&o.logLevel, "log-level", "info", "Level at which to log output.")
 
 	// for _, group := range []flagutil.OptionGroup{&o.instrumentationOptions, &o.jiraOptions} {
-	// 	group.AddFlags(fs)
-	// }
+	for _, group := range []flagutil.OptionGroup{&o.jiraOptions} {
+		group.AddFlags(fs)
+	}
 
 	fs.StringVar(&o.slackTokenPath, "slack-token-path", "", "Path to the file containing the Slack token to use.")
 	fs.StringVar(&o.slackSigningSecretPath, "slack-signing-secret-path", "", "Path to the file containing the Slack signing secret to use.")
@@ -79,10 +79,9 @@ func gatherOptions(fs *flag.FlagSet, args ...string) options {
 	return o
 }
 
-// TODO(muller): Figure out how to use this without importing k/test-infra
-// func l(fragment string, children ...simplifypath.Node) simplifypath.Node {
-// 	return simplifypath.L(fragment, children...)
-// }
+func l(fragment string, children ...simplifypath.Node) simplifypath.Node {
+	return simplifypath.L(fragment, children...)
+}
 
 var (
 // TODO(muller): figure out how to use this without importing k/test-infra
@@ -90,8 +89,7 @@ var (
 )
 
 func main() {
-	// TODO(muller): Figure out how to use this without importing k/test-infra
-	// logrusutil.ComponentInit()
+	logrusutil.ComponentInit()
 
 	o := gatherOptions(flag.NewFlagSet(os.Args[0], flag.ExitOnError), os.Args[1:]...)
 	if err := o.Validate(); err != nil {
@@ -100,25 +98,16 @@ func main() {
 	level, _ := logrus.ParseLevel(o.logLevel)
 	logrus.SetLevel(level)
 
-	// TODO(muller): Figure out how to use this without importing k/test-infra.
-	// TODO(muller): Also, hate the global registration
-	// if err := secret.Add(o.slackTokenPath, o.slackSigningSecretPath); err != nil {
-	// 	logrus.WithError(err).Fatal("Error starting secrets agent.")
-	// }
-
-	// jiraClient, err := o.jiraOptions.Client()
-	// if err != nil {
-	// 	logrus.WithError(err).Fatal("Could not initialize Jira client.")
-	// }
-
-	// TODO(muller): Restore using an agent once I figure out how to import it
-	// slackClient := slack.New(string(secret.GetSecret(o.slackTokenPath)))
-
-	b, err := os.ReadFile(o.slackTokenPath)
-	if err != nil {
-		logrus.WithError(fmt.Errorf("error reading %s: %w", o.slackTokenPath, err)).Fatal("Could not read Slack token.")
+	if err := secret.Add(o.slackTokenPath, o.slackSigningSecretPath); err != nil {
+		logrus.WithError(err).Fatal("Error starting secrets agent.")
 	}
-	slackClient := slack.New(string(bytes.TrimSpace(b)), slack.OptionDebug(true))
+
+	_, err := o.jiraOptions.Client()
+	if err != nil {
+		logrus.WithError(err).Fatal("Could not initialize Jira client.")
+	}
+
+	slackClient := slack.New(string(secret.GetSecret(o.slackTokenPath)), slack.OptionDebug(true))
 
 	// issueFiler, err := jira.NewIssueFiler(slackClient, jiraClient.JiraClient())
 	// if err != nil {
@@ -126,29 +115,20 @@ func main() {
 	// }
 
 	// metrics.ExposeMetrics("slack-bot", config.PushGateway{}, o.instrumentationOptions.MetricsPort)
-	// TODO(muller): Figure out how to use this without importing k/test-infra
-	// simplifier := simplifypath.NewSimplifier(l("", // shadow element mimicking the root
-	// 	l(""), // for black-box health checks
-	// 	l("slack",
-	// 		l("interactive-endpoint"),
-	// 		l("events-endpoint"),
-	// 	),
-	// ))
+	// simplifier = simplifypath.NewSimplifier(l("", // shadow element mimicking the root
+	_ = simplifypath.NewSimplifier(l("", // shadow element mimicking the root
+		l(""), // for black-box health checks
+		l("slack",
+			l("interactive-endpoint"),
+			l("events-endpoint"),
+		),
+	))
 	// handler := metrics.TraceHandler(simplifier, promMetrics.HTTPRequestDuration, promMetrics.HTTPResponseSize)
 	// TODO(muller): Figure out how to use this without importing k/test-infra
 	// pprof.Instrument(o.instrumentationOptions)
 
 	// TODO(muller): Figure out how to use this without importing k/test-infra
 	// health := pjutil.NewHealth()
-
-	// TODO(muller): Replace with agents GetTokenGenerator once I figure out how to import agent
-	slackSigningSecretProvider := func() []byte {
-		b, err := os.ReadFile(o.slackSigningSecretPath)
-		if err != nil {
-			logrus.WithError(fmt.Errorf("error reading %s: %w", o.slackSigningSecretPath, err)).Fatal("Could not read Slack token.")
-		}
-		return bytes.TrimSpace(b)
-	}
 
 	routeEvents := events.MultiHandler(
 		showBlockersHandler(slackClient),
@@ -165,12 +145,11 @@ func main() {
 
 	// TODO(muller): Reenable when we need interactions
 	// mux.Handle("/slack/interactive-endpoint", intlslack.VerifyingInteractionHandler(slackSigningSecretProvider, interactionrouter.ForModals(nil, slackClient)))
-	mux.Handle("/slack/events-endpoint", intlslack.VerifyingEventHandler(slackSigningSecretProvider, routeEvents))
+	mux.Handle("/slack/events-endpoint", intlslack.VerifyingEventHandler(secret.GetTokenGenerator(o.slackSigningSecretPath), routeEvents))
 	server := &http.Server{Addr: ":" + strconv.Itoa(8888), Handler: mux}
 
 	// health.ServeReady()
 
-	// TODO(muller): Figure out how to use these without importing k/test-infra
 	interrupts.ListenAndServe(server, 180*time.Second)
 	interrupts.WaitForGracefulShutdown()
 }
