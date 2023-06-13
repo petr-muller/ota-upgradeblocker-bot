@@ -9,6 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/andygrunwald/go-jira"
+	"github.com/pkg/errors"
+
 	"github.com/sirupsen/logrus"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
@@ -17,6 +20,7 @@ import (
 	secret "github.com/petr-muller/ota-upgradeblocker-bot/internal/prow/config/agent"
 	prowflagutil "github.com/petr-muller/ota-upgradeblocker-bot/internal/prow/flagutil"
 	"github.com/petr-muller/ota-upgradeblocker-bot/internal/prow/interrupts"
+	intljira "github.com/petr-muller/ota-upgradeblocker-bot/internal/prow/jira"
 	"github.com/petr-muller/ota-upgradeblocker-bot/internal/prow/logrusutil"
 	"github.com/petr-muller/ota-upgradeblocker-bot/internal/prow/simplifypath"
 	intlslack "github.com/petr-muller/ota-upgradeblocker-bot/internal/slack"
@@ -102,7 +106,7 @@ func main() {
 		logrus.WithError(err).Fatal("Error starting secrets agent.")
 	}
 
-	_, err := o.jiraOptions.Client()
+	jiraClient, err := o.jiraOptions.Client()
 	if err != nil {
 		logrus.WithError(err).Fatal("Could not initialize Jira client.")
 	}
@@ -130,8 +134,10 @@ func main() {
 	// TODO(muller): Figure out how to use this without importing k/test-infra
 	// health := pjutil.NewHealth()
 
+	upgradeBlockerChecker := newUpgradeBlockerChecker(jiraClient)
+
 	routeEvents := events.MultiHandler(
-		showBlockersHandler(slackClient),
+		showBlockersHandler(slackClient, upgradeBlockerChecker),
 		helpHandler(slackClient),
 	)
 
@@ -204,11 +210,7 @@ func helpResponse() []slack.Block {
 	}
 }
 
-func upgradeBlockersAsSlack() []slack.Block {
-	return nil
-}
-
-func showBlockersHandler(slackClient messagePoster) events.PartialHandler {
+func showBlockersHandler(slackClient messagePoster, checker *upgradeBlockerChecker) events.PartialHandler {
 	return events.PartialHandlerFunc("show_blockers", func(callback *slackevents.EventsAPIEvent, logger *logrus.Entry) (handled bool, err error) {
 		if callback.Type != slackevents.CallbackEvent {
 			return false, nil
@@ -225,7 +227,12 @@ func showBlockersHandler(slackClient messagePoster) events.PartialHandler {
 
 		logger.Info("Handling app mention: show blockers")
 
-		responseChannel, responseTimestamp, err := slackClient.PostMessage(event.Channel, slack.MsgOptionBlocks(upgradeBlockersAsSlack()...))
+		if err := checker.refresh(); err != nil {
+			logger.WithError(err).Warn("Failed to refresh upgrade blockers from Jira")
+			return true, err
+		}
+
+		responseChannel, responseTimestamp, err := slackClient.PostMessage(event.Channel, slack.MsgOptionBlocks(upgradeBlockersAsSlack(checker)...))
 		if err != nil {
 			logger.WithError(err).Warn("Failed to post response to app mention")
 		} else {
@@ -233,4 +240,90 @@ func showBlockersHandler(slackClient messagePoster) events.PartialHandler {
 		}
 		return true, err
 	})
+}
+
+type jiraIssueService interface {
+	Search(jql string, options *jira.SearchOptions) ([]jira.Issue, *jira.Response, error)
+}
+
+type upgradeBlockerChecker struct {
+	issues jiraIssueService
+
+	candidatesWithoutStatementRequest map[string]*jira.Issue
+	candidatesWithStatementRequest    map[string]*jira.Issue
+	candidatesWithProposedStatement   map[string]*jira.Issue
+}
+
+func newUpgradeBlockerChecker(jiraClient intljira.Client) *upgradeBlockerChecker {
+	return &upgradeBlockerChecker{
+		issues: jiraClient.JiraClient().Issue,
+	}
+}
+
+var (
+	jqlCandidatesWithoutStatementRequest = `project=OCPBUGS AND labels in (upgradeblocker) AND labels not in (ImpactStatementRequested, ImpactStatementProposed, UpdateRecommendationsBlocked)`
+	jqlCandidatesWithStatementRequest    = `project=OCPBUGS AND labels in (ImpactStatementRequested)`
+	jqlCandidatesWithProposedStatement   = `project=OCPBUGS AND labels in (ImpactStatementProposed)`
+)
+
+func getIssuesForJql(service jiraIssueService, jql string) ([]jira.Issue, error) {
+	jiras, response, err := service.Search(jql, nil)
+	return jiras, intljira.HandleJiraError(response, errors.Wrap(err, "could not query for Jira issues"))
+}
+
+func (checker *upgradeBlockerChecker) refresh() error {
+	if issues, err := getIssuesForJql(checker.issues, jqlCandidatesWithoutStatementRequest); err == nil {
+		checker.candidatesWithoutStatementRequest = map[string]*jira.Issue{}
+		for idx, issue := range issues {
+			checker.candidatesWithoutStatementRequest[issue.Key] = &issues[idx]
+		}
+	}
+	if issues, err := getIssuesForJql(checker.issues, jqlCandidatesWithStatementRequest); err == nil {
+		checker.candidatesWithStatementRequest = map[string]*jira.Issue{}
+		for idx, issue := range issues {
+			checker.candidatesWithStatementRequest[issue.Key] = &issues[idx]
+		}
+	}
+	if issues, err := getIssuesForJql(checker.issues, jqlCandidatesWithProposedStatement); err == nil {
+		checker.candidatesWithProposedStatement = map[string]*jira.Issue{}
+		for idx, issue := range issues {
+			checker.candidatesWithProposedStatement[issue.Key] = &issues[idx]
+		}
+	}
+
+	return nil
+}
+
+func blockForIssue(issue *jira.Issue) *slack.TextBlockObject {
+	return slack.NewTextBlockObject(slack.MarkdownType, fmt.Sprintf("<https://issues.redhat.com/browse/%s|*%s*>: *%s*", issue.Key, issue.Key, issue.Fields.Summary), false, false)
+}
+
+func upgradeBlockersAsSlack(checker *upgradeBlockerChecker) []slack.Block {
+	var blocks []slack.Block
+
+	blocks = append(blocks, slack.NewHeaderBlock(
+		slack.NewTextBlockObject(slack.PlainTextType, "UpgradeBlockers: Need Impact Statement Request", false, false),
+	))
+
+	for _, issue := range checker.candidatesWithoutStatementRequest {
+		blocks = append(blocks, slack.NewSectionBlock(blockForIssue(issue), nil, nil))
+	}
+
+	blocks = append(blocks, slack.NewHeaderBlock(
+		slack.NewTextBlockObject(slack.PlainTextType, "UpgradeBlockers: Waiting for Impact Statement", false, false),
+	))
+
+	for _, issue := range checker.candidatesWithStatementRequest {
+		blocks = append(blocks, slack.NewSectionBlock(blockForIssue(issue), nil, nil))
+	}
+
+	blocks = append(blocks, slack.NewHeaderBlock(
+		slack.NewTextBlockObject(slack.PlainTextType, "UpgradeBlockers: Impact Statement Proposed", false, false),
+	))
+
+	for _, issue := range checker.candidatesWithProposedStatement {
+		blocks = append(blocks, slack.NewSectionBlock(blockForIssue(issue), nil, nil))
+	}
+
+	return blocks
 }
