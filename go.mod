@@ -17,6 +17,7 @@ require (
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fatih/structs v1.1.0 // indirect
 	github.com/go-test/deep v1.0.7 // indirect
 	github.com/golang-jwt/jwt/v4 v4.4.2 // indirect

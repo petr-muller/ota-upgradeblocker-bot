@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/andygrunwald/go-jira"
 	"github.com/pkg/errors"
 
+	"github.com/andygrunwald/go-jira"
 	"github.com/sirupsen/logrus"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
@@ -22,11 +22,11 @@ import (
 	"github.com/petr-muller/ota-upgradeblocker-bot/internal/prow/interrupts"
 	intljira "github.com/petr-muller/ota-upgradeblocker-bot/internal/prow/jira"
 	"github.com/petr-muller/ota-upgradeblocker-bot/internal/prow/logrusutil"
+	"github.com/petr-muller/ota-upgradeblocker-bot/internal/prow/metrics"
 	"github.com/petr-muller/ota-upgradeblocker-bot/internal/prow/simplifypath"
 	intlslack "github.com/petr-muller/ota-upgradeblocker-bot/internal/slack"
 	"github.com/petr-muller/ota-upgradeblocker-bot/internal/slack/events"
 	// interactionrouter "github.com/openshift/ci-tools/pkg/slack/interactions/router"
-	// "k8s.io/test-infra/prow/metrics"
 	// "k8s.io/test-infra/prow/pjutil/pprof"
 	// "k8s.io/test-infra/prow/pjutil"
 )
@@ -88,8 +88,7 @@ func l(fragment string, children ...simplifypath.Node) simplifypath.Node {
 }
 
 var (
-// TODO(muller): figure out how to use this without importing k/test-infra
-// promMetrics = metrics.NewMetrics("slack_bot")
+	promMetrics = metrics.NewMetrics("ota_upgradeblocker_bot")
 )
 
 func main() {
@@ -119,15 +118,14 @@ func main() {
 	// }
 
 	// metrics.ExposeMetrics("slack-bot", config.PushGateway{}, o.instrumentationOptions.MetricsPort)
-	// simplifier = simplifypath.NewSimplifier(l("", // shadow element mimicking the root
-	_ = simplifypath.NewSimplifier(l("", // shadow element mimicking the root
+	simplifier := simplifypath.NewSimplifier(l("", // shadow element mimicking the root
 		l(""), // for black-box health checks
 		l("slack",
 			l("interactive-endpoint"),
 			l("events-endpoint"),
 		),
 	))
-	// handler := metrics.TraceHandler(simplifier, promMetrics.HTTPRequestDuration, promMetrics.HTTPResponseSize)
+	handler := metrics.TraceHandler(simplifier, promMetrics.HTTPRequestDuration, promMetrics.HTTPResponseSize)
 	// TODO(muller): Figure out how to use this without importing k/test-infra
 	// pprof.Instrument(o.instrumentationOptions)
 
@@ -143,15 +141,10 @@ func main() {
 
 	mux := http.NewServeMux()
 	// handle the root to allow for a simple uptime probe
-	// TODO(muller) enable handler once we somehow import metrics from k/test-infra
-	// mux.Handle("/", handler(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) { writer.WriteHeader(http.StatusOK) })))
-	// mux.Handle("/slack/interactive-endpoint", handler(handleInteraction(secret.GetTokenGenerator(o.slackSigningSecretPath), interactionrouter.ForModals(issueFiler, slackClient))))
-	// mux.Handle("/slack/events-endpoint", handler(handleEvent(secret.GetTokenGenerator(o.slackSigningSecretPath), eventrouter.ForEvents(slackClient, configAgent.Config, gcsClient, o.helpdeskAlias, o.forumChannelId, o.requireWorkflowsInForum))))
-	mux.Handle("/", http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) { writer.WriteHeader(http.StatusOK) }))
-
-	// TODO(muller): Reenable when we need interactions
-	// mux.Handle("/slack/interactive-endpoint", intlslack.VerifyingInteractionHandler(slackSigningSecretProvider, interactionrouter.ForModals(nil, slackClient)))
-	mux.Handle("/slack/events-endpoint", intlslack.VerifyingEventHandler(secret.GetTokenGenerator(o.slackSigningSecretPath), routeEvents))
+	mux.Handle("/", handler(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) { writer.WriteHeader(http.StatusOK) })))
+	// TODO(muller): Re-enable when we need interactions
+	// mux.Handle("/slack/interactive-endpoint", handler(intlslack.VerifyingInteractionHandler(slackSigningSecretProvider, interactionrouter.ForModals(nil, slackClient))))
+	mux.Handle("/slack/events-endpoint", handler(intlslack.VerifyingEventHandler(secret.GetTokenGenerator(o.slackSigningSecretPath), routeEvents)))
 	server := &http.Server{Addr: ":" + strconv.Itoa(8888), Handler: mux}
 
 	// health.ServeReady()
