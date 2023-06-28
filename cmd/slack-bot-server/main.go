@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"k8s.io/apimachinery/pkg/util/sets"
 
 	"github.com/andygrunwald/go-jira"
 	"github.com/sirupsen/logrus"
@@ -319,4 +320,59 @@ func upgradeBlockersAsSlack(checker *upgradeBlockerChecker) []slack.Block {
 	}
 
 	return blocks
+}
+
+type upgradeBlockerNotifier struct {
+	logger        *logrus.Entry
+	checker       *upgradeBlockerChecker
+	slackClient   messagePoster
+	notifyChannel string
+	pollPeriod    time.Duration
+}
+
+func (notifier *upgradeBlockerNotifier) start() {
+	notifier.logger.WithField("period", notifier.pollPeriod).Info("Starting upgrade blocker notifier")
+	ticker := time.NewTicker(notifier.pollPeriod)
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				notifier.checkAndNotify()
+			}
+		}
+	}()
+}
+
+func (notifier *upgradeBlockerNotifier) checkAndNotify() {
+	notifier.logger.Info("Checking for upgrade blocker changes")
+	oldCandidatesWithoutStatementRequest := notifier.checker.candidatesWithoutStatementRequest
+	oldCandidatesWithStatementRequest := notifier.checker.candidatesWithStatementRequest
+	oldCandidatesWithProposedStatement := notifier.checker.candidatesWithProposedStatement
+	oldKeysWithoutStatementRequest := sets.KeySet(notifier.checker.candidatesWithoutStatementRequest)
+	oldKeysWithStatementRequest := sets.KeySet(notifier.checker.candidatesWithStatementRequest)
+	oldKeysWithProposedStatement := sets.KeySet(notifier.checker.candidatesWithProposedStatement)
+	oldKeys := oldKeysWithoutStatementRequest.Union(oldKeysWithStatementRequest).Union(oldKeysWithProposedStatement)
+
+	if err := notifier.checker.refresh(); err != nil {
+		notifier.logger.WithError(err).Error("Failed to refresh upgrade blockers from Jira")
+		return
+	}
+
+	newKeysWithoutStatementRequest := sets.KeySet(notifier.checker.candidatesWithoutStatementRequest)
+	newKeysWithStatementRequest := sets.KeySet(notifier.checker.candidatesWithStatementRequest)
+	newKeysWithProposedStatement := sets.KeySet(notifier.checker.candidatesWithProposedStatement)
+	newKeys := newKeysWithoutStatementRequest.Union(newKeysWithStatementRequest).Union(newKeysWithProposedStatement)
+
+	added := newKeys.Difference(oldKeys)
+	removed := oldKeys.Difference(newKeys)
+	kept := newKeys.Intersection(oldKeys)
+
+	for idx, key := range sets.List(added) {
+		if issue, ok := notifier.checker.candidatesWithoutStatementRequest[key]; ok {
+			notifier.logger.WithField("issue", issue.Key).Info("New upgrade blocker")
+			if err := notifier.slackClient.PostMessage(notifier.notifyChannel, slack.MsgOptionBlocks(upgradeBlockersAsSlack(notifier.checker)...)); err != nil {
+				notifier.logger.WithError(err).Error("Failed to post message to Slack")
+			}
+		}
+	}
 }
