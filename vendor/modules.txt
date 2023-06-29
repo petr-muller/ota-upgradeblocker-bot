@@ -1,3 +1,6 @@
+# github.com/petr-muller/diet-prow-libs v0.0.0-20230629131719-f8bf55eaa93c
+## explicit; go 1.20
+github.com/petr-muller/diet-prow-libs/pkg/prow/interrupts
 # github.com/sirupsen/logrus v1.9.3
 ## explicit; go 1.13
 github.com/sirupsen/logrus
@@ -8,6 +11,3 @@ github.com/sirupsen/logrus
 golang.org/x/sys/internal/unsafeheader
 golang.org/x/sys/unix
 golang.org/x/sys/windows
-# k8s.io/test-infra v0.0.0-20230628134233-6ccde6b16567
-## explicit; go 1.18
-k8s.io/test-infra/prow/interrupts

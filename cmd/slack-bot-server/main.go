@@ -10,7 +10,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"k8s.io/test-infra/prow/interrupts"
+	"github.com/petr-muller/diet-prow-libs/pkg/prow/interrupts"
 )
 
 type options struct {

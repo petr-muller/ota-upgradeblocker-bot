@@ -1,6 +1,8 @@
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+github.com/petr-muller/diet-prow-libs v0.0.0-20230629131719-f8bf55eaa93c h1:Buw482TvWJ59icPgnNry5cqmSVKzEguuPnB/PcBiIhY=
+github.com/petr-muller/diet-prow-libs v0.0.0-20230629131719-f8bf55eaa93c/go.mod h1:Epi+gNrbmiwy9NIZYnOsoTNJWHuzp7N0Kd45Fb5io+I=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/sirupsen/logrus v1.9.3 h1:dueUQJ1C2q9oE3F7wvmSGAaVtTmUizReu6fjN8uqzbQ=
@@ -20,5 +22,3 @@ gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8
 gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
-k8s.io/test-infra v0.0.0-20230628134233-6ccde6b16567 h1:ujaSCnobsC5zK3tKuLOs51t8f/8+gVSpLuVB2xO4EXE=
-k8s.io/test-infra v0.0.0-20230628134233-6ccde6b16567/go.mod h1:JPaEZs3tV5Y0fY1WYlzq4LkLZ285jJGilzIgeoBUe6c=
